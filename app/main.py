@@ -38,6 +38,7 @@ while True:
         time.sleep(2)
 
 
+''' # temporary in-memory storage for feed posts
 my_feed = [{"topic": ["sports", "politics"], "vibe": "casual", "id": 1, "ratings": 5}, 
            {"topic": ["technology", "science"], "vibe": "formal", "id": 2, "ratings": 4}]
 
@@ -51,7 +52,7 @@ def find_post(id):
 def find_post_index(id):
     for index, post in enumerate(my_feed):
         if post["id"] == id:
-            return index
+            return index'''
 
 @app.get("/", response_class=HTMLResponse)
 async def read_item(request: Request):
@@ -75,13 +76,13 @@ def create_post(feed: Feed):
 @app.get("/feed/latest")
 def get_latest_post():
     cursor.execute("SELECT * FROM feed ORDER BY id DESC LIMIT 1")
-    post = cursor.fetchone()
-    return {"data": post}
+    latest_post = cursor.fetchone()
+    return {"data": latest_post}
 
 @app.get("/feed/{id}")
 def get_post(id: int, response: Response):
-    post = find_post(id)
-    print(post)
+    cursor.execute("SELECT * FROM feed WHERE id = %s", (id,))
+    post = cursor.fetchone()
     if not post:
         response.status_code = status.HTTP_404_NOT_FOUND
         return {"message": "Post not found"}
@@ -89,22 +90,22 @@ def get_post(id: int, response: Response):
 
 @app.delete("/feed/{id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_post(id: int, response: Response):
-    post = find_post(id)
-    if not post:
+    cursor.execute("SELECT * FROM feed WHERE id = %s", (id,))
+    deleted_post = cursor.fetchone()
+    if not deleted_post:
         response.status_code = status.HTTP_404_NOT_FOUND
         return {"message": "Post not found"}
-    my_feed.pop(find_post_index(id))
+    cursor.execute("DELETE FROM feed WHERE id = %s", (id,))
+    conn.commit()
     return {"message": "Post deleted successfully"}
 
 @app.put("/feed/{id}")
 def update_post(id: int, updated_post: Feed, response: Response):   
-    post = find_post(id)
-    if not post:
+    cursor.execute("update feed set topics = %s, vibe = %s, max_articles = %s where id = %s RETURNING *", 
+                   (updated_post.topics, updated_post.vibe, updated_post.max_articles, str(id)))  
+    updated_post = cursor.fetchone()
+    conn.commit()
+    if updated_post is None:
         response.status_code = status.HTTP_404_NOT_FOUND
         return {"message": "Post not found"}
-    post_index = find_post_index(id)
-    updated_post_dict = updated_post.dict()
-    updated_post_dict["id"] = id
-    my_feed[post_index] = updated_post_dict
-    return {"data": updated_post_dict}      
-
+    return {"data": updated_post}    
