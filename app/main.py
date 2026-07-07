@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Response, status, Request
+from fastapi import FastAPI, Response, status, Request, Depends
 from pydantic import BaseModel
 from typing import List, Optional
 from fastapi.params import Body
@@ -11,6 +11,9 @@ from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 import os
 import time
+from sqlalchemy.orm import Session
+from . import models
+from .databases import engine, SessionLocal
 
 load_dotenv()
 
@@ -18,6 +21,15 @@ app = FastAPI()
 
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+models.Base.metadata.create_all(bind=engine)
+
+def get_db():
+    db = SessionLocal() 
+    try:
+        yield db
+    finally:
+        db.close()
 
 class Feed(BaseModel):
     topics: List[str]          
@@ -38,25 +50,13 @@ while True:
         time.sleep(2)
 
 
-''' # temporary in-memory storage for feed posts
-my_feed = [{"topic": ["sports", "politics"], "vibe": "casual", "id": 1, "ratings": 5}, 
-           {"topic": ["technology", "science"], "vibe": "formal", "id": 2, "ratings": 4}]
-
-#posts: List[Feed] = []
-
-def find_post(id):
-    for post in my_feed:
-        if post["id"] == id:
-            return post
-        
-def find_post_index(id):
-    for index, post in enumerate(my_feed):
-        if post["id"] == id:
-            return index'''
-
 @app.get("/", response_class=HTMLResponse)
 async def read_item(request: Request):
     return templates.TemplateResponse(request=request, name="index.html", context={})
+
+@app.get("/sqlalchemy")
+def get_sqlalchemy(db: Session = Depends(get_db)):
+    return {"message": "SQLAlchemy is working!"}
 
 @app.get("/feeds")
 def get_posts():
