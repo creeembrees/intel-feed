@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Response, status, Request, Depends
+from fastapi import FastAPI, Response, status, Request, Depends, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
 from fastapi.params import Body
@@ -13,7 +13,7 @@ import os
 import time
 from sqlalchemy.orm import Session
 from . import models
-from .databases import engine, SessionLocal
+from .databases import engine, SessionLocal, get_db
 
 load_dotenv()
 
@@ -23,13 +23,6 @@ templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 models.Base.metadata.create_all(bind=engine)
-
-def get_db():
-    db = SessionLocal() 
-    try:
-        yield db
-    finally:
-        db.close()
 
 class Feed(BaseModel):
     topics: List[str]          
@@ -56,7 +49,9 @@ async def read_item(request: Request):
 
 @app.get("/sqlalchemy")
 def get_sqlalchemy(db: Session = Depends(get_db)):
-    return {"message": "SQLAlchemy is working!"}
+    feeds = db.query(models.Feed).all()
+    print(feeds)
+    return {"data": feeds}
 
 @app.get("/feeds")
 def get_posts():
@@ -66,46 +61,69 @@ def get_posts():
     return {"data": feed}
 
 @app.post("/feed", status_code=status.HTTP_201_CREATED)
-def create_post(feed: Feed):
-    cursor.execute("INSERT INTO feed (topics, vibe, max_articles) VALUES (%s, %s, %s) RETURNING *", 
+def create_post(feed: Feed,db: Session = Depends(get_db)):
+    '''cursor.execute("INSERT INTO feed (topics, vibe, max_articles) VALUES (%s, %s, %s) RETURNING *", 
                    (feed.topics, feed.vibe, feed.max_articles))
     new_post = cursor.fetchone()
-    conn.commit()
-    return {"data": new_post}
+    conn.commit()'''
+    new_feed = models.Feed(topics=feed.topics, vibe=feed.vibe, max_articles=feed.max_articles)
+    db.add(new_feed)
+    db.commit()
+    db.refresh(new_feed)
+    return {"data": new_feed}
 
 @app.get("/feed/latest")
-def get_latest_post():
-    cursor.execute("SELECT * FROM feed ORDER BY id DESC LIMIT 1")
-    latest_post = cursor.fetchone()
-    return {"data": latest_post}
+def get_latest_post(db: Session = Depends(get_db)):
+    latest_feed = db.query(models.Feed).order_by(models.Feed.id.desc()).first()
+    return {"data": latest_feed}
 
 @app.get("/feed/{id}")
-def get_post(id: int, response: Response):
-    cursor.execute("SELECT * FROM feed WHERE id = %s", (id,))
+def get_post(id: int, response: Response, db: Session = Depends(get_db)):
+    '''cursor.execute("SELECT * FROM feed WHERE id = %s", (id,))
     post = cursor.fetchone()
+    if not post:
+        response.status_code = status.HTTP_404_NOT_FOUND
+        return {"message": "Post not found"}'''
+    post = db.query(models.Feed).filter(models.Feed.id == id).all()
     if not post:
         response.status_code = status.HTTP_404_NOT_FOUND
         return {"message": "Post not found"}
     return {"data": post}
 
 @app.delete("/feed/{id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_post(id: int, response: Response):
-    cursor.execute("SELECT * FROM feed WHERE id = %s", (id,))
+def delete_post(id: int, response: Response, db: Session = Depends(get_db)):
+    '''cursor.execute("SELECT * FROM feed WHERE id = %s", (id,))
     deleted_post = cursor.fetchone()
     if not deleted_post:
         response.status_code = status.HTTP_404_NOT_FOUND
         return {"message": "Post not found"}
     cursor.execute("DELETE FROM feed WHERE id = %s", (id,))
-    conn.commit()
-    return {"message": "Post deleted successfully"}
+    conn.commit()'''
+    deleted_feed = db.query(models.Feed).filter(models.Feed.id == id).first()
+    
+    if deleted_feed is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail=f"Post with id {id} not found"
+        )    
+    db.delete(deleted_feed)
+    db.commit()
+    return None
 
 @app.put("/feed/{id}")
-def update_post(id: int, updated_post: Feed, response: Response):   
-    cursor.execute("update feed set topics = %s, vibe = %s, max_articles = %s where id = %s RETURNING *", 
+def update_post(id: int, updated_post: Feed, response: Response, db: Session = Depends(get_db)):   
+    '''cursor.execute("update feed set topics = %s, vibe = %s, max_articles = %s where id = %s RETURNING *", 
                    (updated_post.topics, updated_post.vibe, updated_post.max_articles, str(id)))  
     updated_post = cursor.fetchone()
-    conn.commit()
-    if updated_post is None:
-        response.status_code = status.HTTP_404_NOT_FOUND
-        return {"message": "Post not found"}
-    return {"data": updated_post}    
+    conn.commit()'''
+    post_query = db.query(models.Feed).filter(models.Feed.id == id)
+    post = post_query.first()
+    if post is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail=f"Post with id {id} not found"
+        )
+    post_query.update(updated_post.dict(), synchronize_session=False)
+    db.commit()
+    return {"data": post_query.first()}    
+    
